@@ -310,7 +310,7 @@ func viewer(slug string) template.HTML {
 		panic(err)
 	}
 
-	viewer := template.HTML("<main>" + strings.ReplaceAll(document.content, "\n", "<br>") + "</main>")
+	viewer := "<main>" + parseDocument(document.content) + "</main>"
 
 	var simpleChildren []string // Child documents without children
 	var children []string       // Child documents with children
