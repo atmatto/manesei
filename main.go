@@ -256,7 +256,7 @@ func loadDocuments(docFiles []docFile) map[string]document {
 				// the current document will be accessible, because
 				// the placeholder host will be a child of the root
 				// document.
-				documents[doc.host] = document{slug: doc.host, title: doc.host, content: "# " + title(doc.host)}
+				documents[doc.host] = document{slug: doc.host, title: title(doc.host), content: "# " + title(doc.host)}
 				documents[""] = documents[""].addChild(doc.host)
 			}
 			documents[doc.host] = documents[doc.host].addChild(doc.slug)
@@ -291,17 +291,17 @@ func breadcrumbsHTML(breadcrumbs []breadcrumb) template.HTML {
 	return template.HTML(str)
 }
 
-func viewer(slug string) template.HTML {
+func documentViewer(slug string) template.HTML {
 	documents := loadDocuments(loadFiles())
-	document, exists := documents[slug]
-	path := documentLocation(documents, document.slug)
+	doc, exists := documents[slug]
+	path := documentLocation(documents, doc.slug)
 	var breadcrumbs []breadcrumb
 	for _, slug := range path {
-		doc := documents[slug]
-		if doc.title == "" {
-			doc.title = slug
+		d := documents[slug]
+		if d.title == "" {
+			d.title = slug
 		}
-		breadcrumbs = append(breadcrumbs, breadcrumb{slug, doc.title})
+		breadcrumbs = append(breadcrumbs, breadcrumb{slug, d.title})
 	}
 
 	var headerBuilder strings.Builder
@@ -310,11 +310,11 @@ func viewer(slug string) template.HTML {
 		panic(err)
 	}
 
-	viewer := "<main>" + parseDocument(document.content) + "</main>"
+	viewer := "<main>" + parseDocument(doc.content) + "</main>"
 
 	var simpleChildren []string // Child documents without children
 	var children []string       // Child documents with children
-	for _, slug := range document.children {
+	for _, slug := range doc.children {
 		if len(documents[slug].children) == 0 {
 			simpleChildren = append(simpleChildren, slug)
 		} else {
@@ -338,12 +338,13 @@ func viewer(slug string) template.HTML {
 		viewer = "<main><h2>This document does not exist.</h2></main>"
 	}
 
-	return template.HTML(createPage("Manesei: "+document.title, template.HTML(headerBuilder.String())+viewer+links))
+	return template.HTML(createPage("Manesei: "+doc.title, template.HTML(headerBuilder.String())+viewer+links))
+	// TODO: automatically update links on rename..., document history, file format, backlinks, related documents
 }
 
 func serveViewer() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		page := viewer(r.URL.Path)
+		page := documentViewer(r.URL.Path)
 		w.Write([]byte(page))
 	})
 }
