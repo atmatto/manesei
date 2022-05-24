@@ -46,6 +46,7 @@ func parseDocument(document string) (html template.HTML) {
 	element := newStack[string]()
 	linkStart := 0     // Stores the index of the start of the text between a link's braces.
 	headingLevel := "" // Stores the last added heading, e.g. `h1`.
+	// TODO (nested): listLevel := newStack[int]()
 
 	// match checks if there is an occurrence of substr at the current index of input.
 	match := func(substr string) bool {
@@ -74,12 +75,32 @@ func parseDocument(document string) (html template.HTML) {
 				out += "</" + headingLevel + ">"
 				break
 			case "blockquote":
-				if !match("\n> ") { // New line in a block quote
+				if !match("\n> ") { // End of a block quote
 					element.pop()
 					out += "</blockquote>"
-				} else { // End of a block quote
+				} else { // New line in a block quote
 					out += "\n"
-					i += 1
+					i += 2
+					continue
+				}
+				break
+			case "ul":
+				if !match("\n- ") { // End of the list
+					element.pop()
+					out += "</li></ul>"
+				} else { // New bullet point
+					out += "</li><li>"
+					i += 2
+					continue
+				}
+				break
+			case "ol":
+				if !match("\n. ") { // End of the list
+					element.pop()
+					out += "</li></ol>"
+				} else { // New list element
+					out += "</li><li>"
+					i += 2
 					continue
 				}
 				break
@@ -158,7 +179,24 @@ func parseDocument(document string) (html template.HTML) {
 		if match("\n> ") { // Block quote beginning
 			element.push("blockquote")
 			out += "<blockquote>"
-			i += 1
+			i += 2
+			continue
+		}
+		if match("\n- ") { // Unordered list
+			element.push("ul")
+			out += "<ul><li>"
+			i += 2
+			continue
+		}
+		if match("\n. ") { // Ordered list
+			element.push("ol")
+			out += "<ol><li>"
+			i += 2
+			continue
+		}
+		if match("\n---") { // Horizontal rule
+			out += "<hr>"
+			i += 3
 			continue
 		}
 		if !match("\n") { // Character copied literally
