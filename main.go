@@ -2,7 +2,9 @@ package main
 
 import (
 	"embed"
+	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"html/template"
 	"io"
 	"log"
@@ -88,73 +90,24 @@ type docFile struct {
 	Body string `json:"body,omitempty"` // Content
 }
 
-//func serveDocs() http.Handler {
-//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//		if r.Method == http.MethodPut {
-//			// If the specified file already exists, update it, otherwise
-//			// create a new file with a random identifier. On success respond
-//			// with a doc object with the used identifier but without the body.
-//
-//			var request docFile
-//			requestBytes, err := io.ReadAll(r.Body)
-//			if err != nil {
-//				panic(appError{Err: err, Description: "failed to read request"})
-//			}
-//			if err := json.Unmarshal(requestBytes, &request); err != nil {
-//				panic(appError{err, "failed to parse request: " + err.Error(), http.StatusBadRequest})
-//			}
-//			// If the body is completly empty, it means
-//			// that the file should be deleted.
-//			if request.Body == "" {
-//				err = docs.Remove(request.Id)
-//				if err != nil {
-//					panic(appError{Err: err, Description: "failed to remove file"})
-//				}
-//				return
-//			}
-//			if _, err := docs.Stat(request.Id, false); errors.Is(err, atylar.ErrIllegalPath) || errors.Is(err, os.ErrNotExist) {
-//				request.Id = strings.ReplaceAll(uuid.NewString(), ":", "-")
-//			}
-//			file, err := docs.Write(request.Id)
-//			if err != nil {
-//				panic(appError{Err: err, Description: "failed to open file"})
-//			}
-//			defer file.Close()
-//			if _, err := file.WriteString(request.Body); err != nil {
-//				panic(appError{Err: err, Description: "failed to write file"})
-//			}
-//			responseBytes, err := json.Marshal(docFile{Id: request.Id})
-//			if err != nil {
-//				panic(appError{Err: err, Description: "failed to marhsall response"})
-//			}
-//			_, err = w.Write(responseBytes)
-//			if err != nil {
-//				log.Println("Failed to write reponse", err)
-//			}
-//		} else {
-//			panic(appError{Description: "unsupported method", Status: http.StatusBadRequest})
-//		}
-//	})
-//}
-
 func loadFiles() []docFile {
 	var docFiles []docFile
 	files, err := docs.List("/", false, true)
 	if err != nil {
 		panic(appError{Err: err, Description: "failed to list files"})
 	}
-	for _, file := range files {
-		file = strings.TrimPrefix(file, "/") // TODO: Why was this added?
-		fd, err := docs.Open(file, 0)
+	for _, id := range files {
+		id = strings.TrimPrefix(id, "/")
+		fd, err := docs.Open(id, 0)
 		if err != nil {
-			panic(appError{Err: err, Description: "failed to open file " + file})
+			panic(appError{Err: err, Description: "failed to open file " + id})
 		}
 		defer fd.Close()
 		body, err := io.ReadAll(fd)
 		if err != nil {
-			panic(appError{Err: err, Description: "failed to read file " + file})
+			panic(appError{Err: err, Description: "failed to read file " + id})
 		}
-		docFiles = append(docFiles, docFile{Id: file, Body: string(body)})
+		docFiles = append(docFiles, docFile{Id: id, Body: string(body)})
 	}
 	return docFiles
 }
@@ -198,6 +151,7 @@ func loadDocuments(docFiles []docFile) map[string]document {
 	for _, docFile := range docFiles {
 		// TODO: Safety!
 		doc := document{}
+		doc.id = docFile.Id
 		lines := strings.Split(docFile.Body, "\n")
 		head := strings.SplitN(lines[0], " ", 2)
 		doc.slug = strings.SplitN(head[0], ":", 2)[1]
@@ -305,7 +259,15 @@ func documentViewer(slug string) template.HTML {
 	}
 
 	var headerBuilder strings.Builder
-	err := templates.ExecuteTemplate(&headerBuilder, "header.html", struct{ Path template.HTML }{breadcrumbsHTML(breadcrumbs)})
+	err := templates.ExecuteTemplate(
+		&headerBuilder,
+		"header.html",
+		struct {
+			Path template.HTML
+			Id   string
+			Slug string
+		}{breadcrumbsHTML(breadcrumbs), doc.id, doc.slug},
+	)
 	if err != nil {
 		panic(err)
 	}
@@ -349,6 +311,108 @@ func serveViewer() http.Handler {
 	})
 }
 
+// documentForm contains data sent to and received from an HTML editor form.
+type documentForm struct {
+	Id      string
+	Host    string
+	Slug    string
+	Title   string
+	Headers string // JSON map[string]string
+	Body    string
+}
+
+func serveEditor() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		edit := strings.HasPrefix(r.URL.Path, "/edit/")
+		var argument string
+		if edit {
+			argument = strings.TrimPrefix(r.URL.Path, "/edit/")
+		} else {
+			argument = strings.TrimPrefix(r.URL.Path, "/new/")
+		}
+		switch r.Method {
+		case http.MethodGet:
+			var data documentForm
+
+			if edit {
+				documents := loadDocuments(loadFiles())
+				for _, doc := range documents {
+					if doc.id == argument {
+						headers, err := json.Marshal(doc.headers)
+						if err != nil {
+							panic(err)
+						}
+						data = documentForm{
+							doc.id,
+							doc.host,
+							doc.slug,
+							doc.title,
+							string(headers),
+							doc.content,
+						}
+					}
+				}
+				if data.Id == "" { // Document does not exist.
+					http.Redirect(w, r, "/new/", http.StatusTemporaryRedirect)
+					return
+				}
+			} else { // New document
+				data.Host = argument
+			}
+
+			var pageBuilder strings.Builder
+			err := templates.ExecuteTemplate(&pageBuilder, "editor.html", data)
+			if err != nil {
+				panic(err)
+			}
+			w.Write([]byte(createPage("Manesei (edit)", template.HTML(pageBuilder.String()))))
+		case http.MethodPost:
+			data := documentForm{
+				r.PostFormValue("Id"),
+				r.PostFormValue("Host"),
+				r.PostFormValue("Slug"),
+				r.PostFormValue("Title"),
+				r.PostFormValue("Headers"),
+				r.PostFormValue("Body"),
+			}
+
+			headersStr := ""
+
+			if data.Headers != "" {
+				var headers map[string]string
+				err := json.Unmarshal([]byte(data.Headers), &headers)
+				if err != nil {
+					panic(err)
+				}
+
+				for k, v := range headers {
+					headersStr += k + ": " + v + "\n"
+				}
+			}
+
+			fileStr := data.Host + ":" + data.Slug + " " + data.Title + "\n" + headersStr + "\n" + data.Body
+
+			if _, err := docs.Stat(data.Id, false); data.Id == "" || errors.Is(err, atylar.ErrIllegalPath) || errors.Is(err, os.ErrNotExist) {
+				// New, random identifier
+				data.Id = strings.ReplaceAll(uuid.NewString(), ":", "-")
+			}
+			file, err := docs.Write(data.Id)
+			if err != nil {
+				panic(appError{Err: err, Description: "failed to open file"})
+			}
+			defer file.Close()
+			if _, err := file.WriteString(fileStr); err != nil {
+				panic(appError{Err: err, Description: "failed to write file"})
+			}
+
+			w.Header().Set("Location", "/n/"+data.Slug)
+			w.WriteHeader(http.StatusSeeOther)
+		default:
+			panic(errors.New("wrong method"))
+		}
+	})
+}
+
 func main() {
 	var err error
 	if docs, err = atylar.New(dataDirectory); err != nil {
@@ -358,6 +422,9 @@ func main() {
 	http.Handle("/", handler(http.RedirectHandler("/n/", http.StatusTemporaryRedirect)))
 	http.Handle("/fonts/", http.FileServer(http.FS(fontsFS)))
 	http.Handle("/n/", http.StripPrefix("/n/", handler(serveViewer())))
+	http.Handle("/edit/", handler(serveEditor())) // /edit/id
+	http.Handle("/new/", handler(serveEditor()))  // /new/host
+	// /history/id/revision
 
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }

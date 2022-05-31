@@ -1,0 +1,20 @@
+<form method="post">
+    <input type="hidden" name="Id" value="{{.Id}}">
+    <input type="hidden" name="Headers" value="{{.Headers}}">
+    <header class="editor">
+        <div>
+            <input type="text" name="Host" placeholder="Host" value="{{.Host}}">
+            <input type="text" name="Slug" placeholder="Slug" value="{{.Slug}}">
+            <input type="text" name="Title" placeholder="Title" value="{{.Title}}">
+        </div>
+        <nav>
+            <ul>
+                <li><a href="/n/{{if eq .Slug ""}} {{- .Host -}} {{else}} {{- .Slug -}} {{end}}">cancel</a></li>
+                <li><input class="link-button" type="submit" value="save"></li>
+            </ul>
+        </nav>
+    </header>
+
+    <textarea name="Body">{{.Body}}</textarea>
+</form>
+

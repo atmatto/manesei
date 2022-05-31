@@ -73,7 +73,6 @@ func parseDocument(document string) (html template.HTML) {
 			case "h": // End of a heading
 				element.pop()
 				out += "</" + headingLevel + ">"
-				break
 			case "blockquote":
 				if !match("\n> ") { // End of a block quote
 					element.pop()
@@ -83,7 +82,6 @@ func parseDocument(document string) (html template.HTML) {
 					i += 2
 					continue
 				}
-				break
 			case "ul":
 				if !match("\n- ") { // End of the list
 					element.pop()
@@ -93,7 +91,6 @@ func parseDocument(document string) (html template.HTML) {
 					i += 2
 					continue
 				}
-				break
 			case "ol":
 				if !match("\n. ") { // End of the list
 					element.pop()
@@ -103,10 +100,8 @@ func parseDocument(document string) (html template.HTML) {
 					i += 2
 					continue
 				}
-				break
 			default: // New line
 				out += "\n"
-				break
 			}
 		}
 		if element.peek() == "{}" && !match("}") {

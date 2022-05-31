@@ -72,10 +72,19 @@
 			header .path a.root {
 				text-decoration: none;
 			}
-			a {
+			.link-button {
+				border: none;
+				background: none;
+				text-decoration: underline;
+				font-size: inherit;
+				padding: 0;
+				cursor: pointer;
+				font-family: inherit;
+			}
+			a, .link-button {
 				color: black;
 			}
-			a:hover {
+			a:hover, .link-button:hover {
 				background-color: black;
 				color: white;
 			}
@@ -149,6 +158,60 @@
 			}
 			.file:hover {
 				background-color: hsl(207 11.1% 85.9%);
+			}
+			header.editor {
+				column-gap: 4px;
+			}
+			header.editor > nav {
+				margin-left: auto;
+			}
+			header.editor > div {
+				display: flex;
+				flex-direction: row;
+				flex-grow: 1;
+				flex-wrap: wrap;
+				gap: 4px;
+			}
+			header.editor input[type="text"]:not([name="title"]) {
+				width: 20ch;
+			}
+			header.editor input[type="text"] {
+				flex-grow: 1;
+				flex-shrink: 1;
+				border: none;
+				outline: none;
+				border-bottom: 1px solid transparent;
+				border-radius: 0;
+				font: inherit;
+				transition: border-bottom-color 100ms;
+			}
+			header.editor input[type="text"]:hover {
+				border-bottom: 1px solid #aaa;
+			}
+			header.editor input[type="text"]:focus {
+				border-bottom: 1px solid #777;
+			}
+			header.editor input[name="title"] {
+				flex-shrink: 1;
+				flex-grow: 4;
+			}
+			textarea {
+				width: 100%;
+				resize: none;
+				min-height: 400px;
+				height: calc(100vh - 200px);
+				padding: 8px;
+				border: 1px solid #ddd;
+				border-radius: 0;
+				outline: none;
+				font: inherit;
+				transition: border-color 200ms;
+			}
+			textarea:hover {
+				border: 1px solid #aaa;
+			}
+			textarea:focus {
+				border: 1px solid #aaa;
 			}
 		</style>
 	</head>
