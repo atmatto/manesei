@@ -4,6 +4,7 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/google/uuid"
 	"html/template"
 	"io"
@@ -23,25 +24,12 @@ var fontsFS embed.FS
 var templatesFS embed.FS
 var templates = template.Must(template.ParseFS(templatesFS, "templates/*"))
 
-// createPage returns a full HTML document
-func createPage(title string, body template.HTML) string {
-	var s strings.Builder
-	err := templates.ExecuteTemplate(&s, "app.html", struct {
-		Title string
-		Body  template.HTML
-	}{title, body})
-	if err != nil {
-		panic(err)
-	}
-	return s.String()
-}
-
 var dataDirectory = "notes"
 var docs atylar.Store
 
 type appError struct {
-	Err         error  // The real error, not reported to the client
-	Description string // What will be reported in the http response
+	Err         error  // The real error
+	Description string // Description of the error to be reported to the user
 	Status      int    // Status code to use in response (Default: 500)
 }
 
@@ -55,34 +43,48 @@ func (err *appError) Error() string {
 	}
 }
 
-// handler does error reporting
-func handler(next http.Handler) http.Handler {
+// errorHandler does error reporting
+func errorHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			r := recover()
-			if r != nil {
-				if err, ok := r.(appError); ok {
-					if err.Err != nil {
-						log.Println(err)
-					}
-					status := http.StatusInternalServerError
-					if err.Status != 0 {
-						status = err.Status
-					}
-					if perr, ok := err.Err.(*os.PathError); ok {
-						err.Description += " (" + perr.Op + ": " + perr.Err.Error() + ")"
-					} else if errors.Is(err.Err, atylar.ErrIllegalPath) {
-						err.Description += " (illegal path)"
-					}
-					http.Error(w, err.Description, status)
+			recovered := recover()
+			if recovered != nil {
+				log.Println("error ("+log.Prefix()+"; "+r.URL.String()+"):", recovered)
+				err, ok := recovered.(appError)
+				if !ok {
+					err.Err = recovered.(error)
+					err.Description = "Unknown error"
+				}
+				status := http.StatusInternalServerError
+				if err.Status != 0 {
+					status = err.Status
+				}
+				w.WriteHeader(status)
+
+				var s strings.Builder
+				terr := templates.ExecuteTemplate(&s, "error.html", err)
+				if terr == nil {
+					w.Write([]byte(s.String()))
 				} else {
-					log.Println(r)
-					http.Error(w, "Unknown error ("+log.Prefix()+")", http.StatusInternalServerError)
+					w.Write([]byte(err.Error()))
 				}
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// createPage returns a full HTML document
+func createPage(title string, body template.HTML) string {
+	var s strings.Builder
+	err := templates.ExecuteTemplate(&s, "app.html", struct {
+		Title string
+		Body  template.HTML
+	}{title, body})
+	if err != nil {
+		panic(appError{Err: err, Description: "Failed to create HTML document"})
+	}
+	return s.String()
 }
 
 type docFile struct {
@@ -94,18 +96,18 @@ func loadFiles() []docFile {
 	var docFiles []docFile
 	files, err := docs.List("/", false, true)
 	if err != nil {
-		panic(appError{Err: err, Description: "failed to list files"})
+		panic(appError{Err: err, Description: "Failed to retrieve document list"})
 	}
 	for _, id := range files {
 		id = strings.TrimPrefix(id, "/")
 		fd, err := docs.Open(id, 0)
 		if err != nil {
-			panic(appError{Err: err, Description: "failed to open file " + id})
+			panic(appError{Err: err, Description: "Failed to open file " + id})
 		}
 		defer fd.Close()
 		body, err := io.ReadAll(fd)
 		if err != nil {
-			panic(appError{Err: err, Description: "failed to read file " + id})
+			panic(appError{Err: err, Description: "Failed to read file " + id})
 		}
 		docFiles = append(docFiles, docFile{Id: id, Body: string(body)})
 	}
@@ -115,7 +117,7 @@ func loadFiles() []docFile {
 type document struct {
 	id          string
 	host        string
-	slug        string
+	slug        string // Document name
 	isDuplicate bool   // An exactly named document already exists
 	duplicateOf string // In case of a duplicate, this stores the original slug
 	title       string
@@ -134,13 +136,12 @@ func (host document) addChild(slug string) document {
 	return host
 }
 
+// title returns the given string with the first character converted to title case
 func title(str string) string {
 	if len(str) < 1 {
 		return str
 	}
-	first := string(str[0])
-	tail := str[1:]
-	return strings.ToTitle(first) + tail
+	return strings.ToTitle(string(str[0])) + str[1:]
 }
 
 func loadDocuments(docFiles []docFile) map[string]document {
@@ -149,16 +150,34 @@ func loadDocuments(docFiles []docFile) map[string]document {
 	}
 
 	for _, docFile := range docFiles {
-		// TODO: Safety!
 		doc := document{}
-		doc.id = docFile.Id
 		lines := strings.Split(docFile.Body, "\n")
 		head := strings.SplitN(lines[0], " ", 2)
-		doc.slug = strings.SplitN(head[0], ":", 2)[1]
-		if _, ok := documents[doc.slug]; ok {
-			doc = documents[doc.slug]
+		// Document id is used as the slug if it isn't present.
+		hostSlug := append(strings.SplitN(head[0], ":", 2), doc.id)
+		// Slug is used as the title if missing.
+		head = append(head, hostSlug[1])
+		doc.slug = hostSlug[1]
+		if d, ok := documents[doc.slug]; ok {
+			fmt.Println(doc.id+";", d, ";"+doc.slug+";")
+			if d.id != "" && d.id != docFile.Id {
+				// An exactly named document already exists. The slug
+				// of the current name is changed and the original
+				// slug is saved in the `duplicateOf` field.
+				doc.isDuplicate = true
+				doc.duplicateOf = doc.slug
+				doc.slug += "-duplicate"
+				for d, ok := documents[doc.slug]; ok && d.id != "" && d.id != docFile.Id; d, ok = documents[doc.slug] {
+					doc.slug += string("abcdefghijklmnopqrstuvwxyz"[rand.Intn(26)])
+				}
+			} else {
+				// The document was already added, for example
+				// it was mentioned as the host of another document.
+				doc = documents[doc.slug]
+			}
 		}
-		doc.host = strings.SplitN(head[0], ":", 2)[0]
+		doc.id = docFile.Id
+		doc.host = hostSlug[0]
 		doc.title = head[1]
 
 		// If host and slug are equal to "", then
@@ -186,18 +205,6 @@ func loadDocuments(docFiles []docFile) map[string]document {
 			doc.headers[strings.TrimSpace(h[0])] = strings.TrimSpace(h[1])
 		}
 		doc.content = strings.Join(lines[counter:], "\n")
-
-		// If an exactly named document already exists, then the
-		// slug of the current name is changed and the original
-		// slug is saved in the `duplicateOf` field.
-		if d, ok := documents[doc.slug]; ok && d.id != "" && d.id != docFile.Id {
-			doc.isDuplicate = true
-			doc.duplicateOf = doc.slug
-			doc.slug += "-duplicate"
-			for d, ok := documents[doc.slug]; ok && d.id != "" && d.id != docFile.Id; d, ok = documents[doc.slug] {
-				doc.slug += string("abcdefghijklmnopqrstuvwxyz"[rand.Intn(26)])
-			}
-		}
 
 		documents[doc.slug] = doc
 	}
@@ -269,7 +276,7 @@ func documentViewer(slug string) template.HTML {
 		}{breadcrumbsHTML(breadcrumbs), doc.id, doc.slug},
 	)
 	if err != nil {
-		panic(err)
+		panic(appError{Err: err, Description: "Failed to generate page header"})
 	}
 
 	viewer := "<main>" + parseDocument(doc.content) + "</main>"
@@ -363,7 +370,7 @@ func serveEditor() http.Handler {
 			var pageBuilder strings.Builder
 			err := templates.ExecuteTemplate(&pageBuilder, "editor.html", data)
 			if err != nil {
-				panic(err)
+				panic(appError{Err: err, Description: "Failed to generate editor page"})
 			}
 			w.Write([]byte(createPage("Manesei (edit)", template.HTML(pageBuilder.String()))))
 		case http.MethodPost:
@@ -382,7 +389,7 @@ func serveEditor() http.Handler {
 				var headers map[string]string
 				err := json.Unmarshal([]byte(data.Headers), &headers)
 				if err != nil {
-					panic(err)
+					panic(appError{Err: err, Description: "Failed to parse document headers"})
 				}
 
 				for k, v := range headers {
@@ -398,17 +405,17 @@ func serveEditor() http.Handler {
 			}
 			file, err := docs.Write(data.Id)
 			if err != nil {
-				panic(appError{Err: err, Description: "failed to open file"})
+				panic(appError{Err: err, Description: "Failed to open file"})
 			}
 			defer file.Close()
 			if _, err := file.WriteString(fileStr); err != nil {
-				panic(appError{Err: err, Description: "failed to write file"})
+				panic(appError{Err: err, Description: "Failed to write file"})
 			}
 
 			w.Header().Set("Location", "/n/"+data.Slug)
 			w.WriteHeader(http.StatusSeeOther)
 		default:
-			panic(errors.New("wrong method"))
+			panic(appError{Description: "Unsupported HTTP method"})
 		}
 	})
 }
@@ -419,11 +426,11 @@ func main() {
 		log.Fatal("Couldn't init storage.")
 	}
 
-	http.Handle("/", handler(http.RedirectHandler("/n/", http.StatusTemporaryRedirect)))
+	http.Handle("/", errorHandler(http.RedirectHandler("/n/", http.StatusTemporaryRedirect)))
 	http.Handle("/fonts/", http.FileServer(http.FS(fontsFS)))
-	http.Handle("/n/", http.StripPrefix("/n/", handler(serveViewer())))
-	http.Handle("/edit/", handler(serveEditor())) // /edit/id
-	http.Handle("/new/", handler(serveEditor()))  // /new/host
+	http.Handle("/n/", http.StripPrefix("/n/", errorHandler(serveViewer())))
+	http.Handle("/edit/", errorHandler(serveEditor())) // /edit/id
+	http.Handle("/new/", errorHandler(serveEditor()))  // /new/host
 	// /history/id/revision
 
 	log.Fatal(http.ListenAndServe(":8000", nil))

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>Manesei - error</title>
+		<style>
+			@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans&display=swap');
+
+			* {
+				box-sizing: border-box;
+			}
+			body {
+				font-family: 'IBM Plex Sans', sans-serif;
+				padding: 16px;
+			}
+			::selection {
+				background-color: wheat;
+			}
+			main {
+				font-size: 15px;
+				max-width: 1000px;
+				margin-top: 64px;
+			}
+			main h1, main h2, main h3, main h4, main h5, main h6, main pre {
+				margin: 4px 0;
+			}
+			h1, h2, h3, h4, h5, h6 {
+				font-weight: normal;
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<h1 style="font-size: 15px;">Manesei</h1>
+			<p style="font-size: 22.5px; margin: 4px 0;">{{.Description}}</p>
+			<p style="font-size: 15px; margin: 4px 0;">{{.Err}}</p>
+		</main>
+	</body>
+</html>
