@@ -4,14 +4,15 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/google/uuid"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/atmatto/atylar"
@@ -144,69 +145,76 @@ func title(str string) string {
 	return strings.ToTitle(string(str[0])) + str[1:]
 }
 
+// addDocument parses the docFile and adds the document to the documents map.
+// The return value is of course the same as the argument, so it can be ignored.
+func addDocument(docFile docFile, documents map[string]document) map[string]document {
+	doc := document{}
+	lines := strings.Split(docFile.Body, "\n")
+	head := strings.SplitN(lines[0], " ", 2)
+	// Document id is used as the slug if it isn't present.
+	hostSlug := append(strings.SplitN(head[0], ":", 2), doc.id)
+	// Slug is used as the title if missing.
+	head = append(head, hostSlug[1])
+	doc.slug = hostSlug[1]
+	if d, ok := documents[doc.slug]; ok {
+		if d.id != "" && d.id != docFile.Id {
+			// An exactly named document already exists. The slug
+			// of the current name is changed and the original
+			// slug is saved in the `duplicateOf` field.
+			doc.isDuplicate = true
+			doc.duplicateOf = doc.slug
+			doc.slug += "-duplicate"
+			for d, ok := documents[doc.slug]; ok && d.id != "" && d.id != docFile.Id; d, ok = documents[doc.slug] {
+				doc.slug += string("abcdefghijklmnopqrstuvwxyz"[rand.Intn(26)])
+			}
+		} else {
+			// The document was already added, for example
+			// it was mentioned as the host of another document.
+			doc = documents[doc.slug]
+		}
+	}
+	doc.id = docFile.Id
+	doc.host = hostSlug[0]
+	doc.title = head[1]
+
+	// If host and slug are equal to "", then
+	// the document is the root document.
+
+	if doc.host == doc.slug {
+		// In case of a cyclic reference, the
+		// root document is set to be the host.
+		doc.host = ""
+	}
+
+	counter := 1
+	for _, line := range lines[1:] {
+		counter++
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		h := strings.SplitN(line, ":", 2)
+		if len(h) == 1 {
+			break
+		}
+		if doc.headers == nil {
+			doc.headers = make(map[string]string)
+		}
+		doc.headers[strings.TrimSpace(h[0])] = strings.TrimSpace(h[1])
+	}
+	doc.content = strings.Join(lines[counter:], "\n")
+
+	documents[doc.slug] = doc
+
+	return documents
+}
+
 func loadDocuments(docFiles []docFile) map[string]document {
 	documents := map[string]document{
 		"": {title: "🌱", content: "# Manesei"},
 	}
 
 	for _, docFile := range docFiles {
-		doc := document{}
-		lines := strings.Split(docFile.Body, "\n")
-		head := strings.SplitN(lines[0], " ", 2)
-		// Document id is used as the slug if it isn't present.
-		hostSlug := append(strings.SplitN(head[0], ":", 2), doc.id)
-		// Slug is used as the title if missing.
-		head = append(head, hostSlug[1])
-		doc.slug = hostSlug[1]
-		if d, ok := documents[doc.slug]; ok {
-			fmt.Println(doc.id+";", d, ";"+doc.slug+";")
-			if d.id != "" && d.id != docFile.Id {
-				// An exactly named document already exists. The slug
-				// of the current name is changed and the original
-				// slug is saved in the `duplicateOf` field.
-				doc.isDuplicate = true
-				doc.duplicateOf = doc.slug
-				doc.slug += "-duplicate"
-				for d, ok := documents[doc.slug]; ok && d.id != "" && d.id != docFile.Id; d, ok = documents[doc.slug] {
-					doc.slug += string("abcdefghijklmnopqrstuvwxyz"[rand.Intn(26)])
-				}
-			} else {
-				// The document was already added, for example
-				// it was mentioned as the host of another document.
-				doc = documents[doc.slug]
-			}
-		}
-		doc.id = docFile.Id
-		doc.host = hostSlug[0]
-		doc.title = head[1]
-
-		// If host and slug are equal to "", then
-		// the document is the root document.
-
-		if doc.host == doc.slug {
-			// In case of a cyclic reference, the
-			// root document is set to be the host.
-			doc.host = ""
-		}
-
-		counter := 1
-		for _, line := range lines[1:] {
-			counter++
-			if strings.TrimSpace(line) == "" {
-				break
-			}
-			h := strings.SplitN(line, ":", 2)
-			if len(h) == 1 {
-				break
-			}
-			if doc.headers == nil {
-				doc.headers = make(map[string]string)
-			}
-			doc.headers[strings.TrimSpace(h[0])] = strings.TrimSpace(h[1])
-		}
-		doc.content = strings.Join(lines[counter:], "\n")
-
-		documents[doc.slug] = doc
+		addDocument(docFile, documents)
 	}
 
 	// Connections
@@ -244,11 +252,10 @@ type breadcrumb struct {
 }
 
 func breadcrumbsHTML(breadcrumbs []breadcrumb) template.HTML {
-	str := `<div class="path"><a class="root" href="/n/">🌱</a>`
+	str := `<a class="root" href="/n/">🌱</a>`
 	for _, b := range breadcrumbs {
 		str += ` / <a href="` + b.slug + `">` + b.title + `</a>`
 	}
-	str += `</div>`
 	return template.HTML(str)
 }
 
@@ -307,14 +314,39 @@ func documentViewer(slug string) template.HTML {
 		viewer = "<main><h2>This document does not exist.</h2></main>"
 	}
 
-	return template.HTML(createPage("Manesei: "+doc.title, template.HTML(headerBuilder.String())+viewer+links))
-	// TODO: automatically update links on rename..., document history, file format, backlinks, related documents
+	id := template.HTML(`<p style="margin-top: 64px;" class="docId">(` + doc.id + `)</p>`)
+
+	return template.HTML(createPage("Manesei: "+doc.title,
+		template.HTML(headerBuilder.String())+viewer+links+id))
+	// TODO: automatically update links on rename..., file format, backlinks, related documents
 }
 
 func serveViewer() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		page := documentViewer(r.URL.Path)
 		w.Write([]byte(page))
+	})
+}
+
+func redirectNoteId() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		argument := r.URL.Path
+
+		f, err := docs.Open(argument, 0)
+		if errors.Is(err, os.ErrNotExist) { // File does not exist.
+			panic(appError{Description: "Note with given ID does not exist: " + argument, Status: http.StatusNotFound})
+		} else if err != nil {
+			panic(appError{Err: err, Description: "Failed to open document"})
+		} else { // File exists
+			bytes, err := ioutil.ReadAll(f)
+			if err != nil {
+				panic(appError{Err: err, Description: "Failed to read file"})
+			}
+			docs := addDocument(docFile{argument, string(bytes)}, make(map[string]document, 1))
+			for _, d := range docs { // `docs` should contain only one document.
+				http.Redirect(w, r, "/n/"+d.slug, http.StatusFound)
+			}
+		}
 	})
 }
 
@@ -342,26 +374,42 @@ func serveEditor() http.Handler {
 			var data documentForm
 
 			if edit {
-				documents := loadDocuments(loadFiles())
-				for _, doc := range documents {
-					if doc.id == argument {
-						headers, err := json.Marshal(doc.headers)
-						if err != nil {
-							panic(err)
-						}
-						data = documentForm{
-							doc.id,
-							doc.host,
-							doc.slug,
-							doc.title,
-							string(headers),
-							doc.content,
-						}
-					}
-				}
-				if data.Id == "" { // Document does not exist.
+				var doc document
+
+				// If URL query parameter `v` is set, then it will be used as the generation
+				// number. This lets the user open a historic version of the document in the
+				// editor in order to restore it. If the parameter is not used, then `generation`
+				// will be equal to 0 which means it will use the current version.
+				generation, _ := strconv.ParseUint(r.URL.Query().Get("v"), 10, 64)
+				f, err := docs.Open(argument, generation)
+				if errors.Is(err, os.ErrNotExist) { // File does not exist.
 					http.Redirect(w, r, "/new/", http.StatusTemporaryRedirect)
 					return
+				} else if err != nil {
+					panic(appError{Err: err, Description: "Failed to open document"})
+				} else { // File exists
+					bytes, err := ioutil.ReadAll(f)
+					if err != nil {
+						panic(appError{Err: err, Description: "Failed to read file"})
+					}
+					docs := addDocument(docFile{argument, string(bytes)}, make(map[string]document, 1))
+					for _, d := range docs { // `docs` should contain only one document.
+						doc = d
+					}
+				}
+				defer f.Close()
+
+				headers, err := json.Marshal(doc.headers)
+				if err != nil {
+					panic(err)
+				}
+				data = documentForm{
+					doc.id,
+					doc.host,
+					doc.slug,
+					doc.title,
+					string(headers),
+					doc.content,
 				}
 			} else { // New document
 				data.Host = argument
@@ -420,6 +468,70 @@ func serveEditor() http.Handler {
 	})
 }
 
+func serveHistory() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		arguments := append(strings.Split(strings.TrimPrefix(r.URL.Path, "/history/"), "/"), "current")
+		id := arguments[0]
+		revision := arguments[1]
+
+		revisions, err := docs.FileHistory(id)
+		if err != nil {
+			panic(appError{Err: err, Description: "Couldn't load document's revision list."})
+		}
+		revisionsStr := []string{"current"}
+		for _, rev := range revisions {
+			revisionsStr = append(revisionsStr, strconv.FormatUint(rev, 10))
+		}
+
+		var viewer template.HTML
+		var doc document
+		generation, _ := strconv.ParseUint(revision, 10, 64)
+		f, err := docs.Open(id, generation)
+		if errors.Is(err, os.ErrNotExist) {
+			viewer = template.HTML("<span style=\"font-size: 22.5px;\">File does not exist</span>")
+		} else if err != nil {
+			panic(appError{Err: err, Description: "Failed to open document"})
+		} else {
+			bytes, err := ioutil.ReadAll(f)
+			if err != nil {
+				panic(appError{Err: err, Description: "Failed to read file"})
+			}
+			docs := addDocument(docFile{id, string(bytes)}, make(map[string]document, 1))
+			for _, d := range docs {
+				doc = d
+			}
+			viewer = parseDocument(doc.content)
+		}
+		defer f.Close()
+
+		linkText := doc.title
+		if linkText == "" {
+			if doc.slug == "" {
+				linkText = "🌱"
+			} else {
+				linkText = doc.slug
+			}
+		} else if doc.slug != "" {
+			linkText += " (" + doc.slug + ")"
+		}
+
+		var pageBuilder strings.Builder
+		err = templates.ExecuteTemplate(&pageBuilder, "history.html", struct {
+			Title     string
+			Slug      string
+			Link      string
+			Id        string
+			Revisions []string
+			Revision  string
+			Viewer    template.HTML
+		}{doc.title, doc.slug, linkText, id, revisionsStr, revision, viewer})
+		if err != nil {
+			panic(appError{Err: err, Description: "Failed to generate editor page"})
+		}
+		w.Write([]byte(createPage("Manesei (history)", template.HTML(pageBuilder.String()))))
+	})
+}
+
 func main() {
 	var err error
 	if docs, err = atylar.New(dataDirectory); err != nil {
@@ -428,10 +540,11 @@ func main() {
 
 	http.Handle("/", errorHandler(http.RedirectHandler("/n/", http.StatusTemporaryRedirect)))
 	http.Handle("/fonts/", http.FileServer(http.FS(fontsFS)))
-	http.Handle("/n/", http.StripPrefix("/n/", errorHandler(serveViewer())))
-	http.Handle("/edit/", errorHandler(serveEditor())) // /edit/id
-	http.Handle("/new/", errorHandler(serveEditor()))  // /new/host
-	// /history/id/revision
+	http.Handle("/n/", http.StripPrefix("/n/", errorHandler(serveViewer())))        // /note/slug
+	http.Handle("/nid/", http.StripPrefix("/nid/", errorHandler(redirectNoteId()))) // /nid/id Redirect to note by id instead of slug
+	http.Handle("/edit/", errorHandler(serveEditor()))                              // /edit/id
+	http.Handle("/new/", errorHandler(serveEditor()))                               // /new/host
+	http.Handle("/history/", errorHandler(serveHistory()))                          // /history/id/revision
 
 	log.Fatal(http.ListenAndServe(":8000", nil))
 }

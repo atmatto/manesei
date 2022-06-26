@@ -1,0 +1,16 @@
+<header>
+	<div>History of <a href="/nid/{{.Id}}">{{.Link}}</a> <span class="docId">({{.Id}})</span></div>
+	<nav>
+		<ul>
+			<li><a href="/edit/{{.Id}}?v={{.Revision}}">open selected version in editor</a></li>
+		</ul>
+	</nav>
+</header>
+<div class="history">
+	<div class="revisions">
+		{{$Id := .Id}}
+		{{$Revision := .Revision}}
+		{{range .Revisions}} {{if eq . $Revision}} <a href="/history/{{$Id}}/{{.}}" class="current">{{.}}</a> {{else}} <a href="/history/{{$Id}}/{{.}}">{{.}}</a> {{end}} {{end}}
+	</div>
+	<main>{{.Viewer}}</main>
+</div>

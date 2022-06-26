@@ -43,7 +43,7 @@
 			nav > ul {
 				display: flex;
 				list-style-type: none;
-				margin: 0 0 0 6px;
+				margin: 0;
 				padding: 0;
 				user-select: none;
 				column-gap: 8px;
@@ -212,6 +212,35 @@
 			}
 			textarea:focus {
 				border: 1px solid #aaa;
+			}
+
+			.docId {
+				color: #888;
+			}
+
+			.history {
+				margin-top: -48px;
+			}
+			.history .revisions {
+				display: flex;
+				flex-direction: row;
+				flex-wrap: wrap;
+				gap: 8px;
+				margin-bottom: 64px;
+			}
+			.history .revisions a {
+				padding: 2px 8px;
+				border-radius: 16px;
+				background-color: #dfdfdf;
+				text-decoration: none;
+				user-select: none;
+			}
+			.history .revisions a:hover {
+				background-color: black;
+			}
+			.history .revisions a.current {
+				background-color: #cfcfdf !important;
+				color: black !important;
 			}
 		</style>
 	</head>
