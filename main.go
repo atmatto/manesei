@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -232,6 +233,11 @@ func loadDocuments(docFiles []docFile) map[string]document {
 		}
 	}
 
+	// Sort children (otherwise the order in which they are displayed changes with every page refresh)
+	for _, doc := range documents {
+		sort.Strings(doc.children)
+	}
+
 	return documents
 }
 
@@ -262,6 +268,11 @@ func breadcrumbsHTML(breadcrumbs []breadcrumb) template.HTML {
 func documentViewer(slug string) template.HTML {
 	documents := loadDocuments(loadFiles())
 	doc, exists := documents[slug]
+	if !exists {
+		return template.HTML(createPage("Manesei",
+			template.HTML(`<header><div class="path"><a class="root" href="/n/">🌱</a></div></header>
+				<main><h2>This document does not exist.</h2></main>`)))
+	}
 	path := documentLocation(documents, doc.slug)
 	var breadcrumbs []breadcrumb
 	for _, slug := range path {
@@ -297,24 +308,28 @@ func documentViewer(slug string) template.HTML {
 			children = append(children, slug)
 		}
 	}
-	links := template.HTML(`<ul class="links">`)
-	for _, slug := range simpleChildren {
-		links += template.HTML(`<li><a class="file" href="` + slug + `">` + documents[slug].title + `</a></li>`)
-	}
-	links += `</ul>`
-	for _, slug := range children {
-		links += template.HTML(`<a class="file" href="` + slug + `">` + documents[slug].title + `</a><ul class="links">`)
-		for _, child := range documents[slug].children {
-			links += template.HTML(`<li><a class="file" href="` + child + `">` + documents[child].title + `</a></li>`)
+	var links template.HTML
+	if len(simpleChildren) != 0 {
+		links += template.HTML(`<ul class="links">`)
+		for _, slug := range simpleChildren {
+			links += template.HTML(`<li><a class="file" href="` + slug + `">` + documents[slug].title + `</a></li>`)
 		}
 		links += `</ul>`
 	}
-
-	if !exists {
-		viewer = "<main><h2>This document does not exist.</h2></main>"
+	if len(children) != 0 {
+		for _, slug := range children {
+			links += template.HTML(`<a class="file" href="` + slug + `">` + documents[slug].title + `</a><ul class="links">`)
+			for _, child := range documents[slug].children {
+				links += template.HTML(`<li><a class="file" href="` + child + `">` + documents[child].title + `</a></li>`)
+			}
+			links += `</ul>`
+		}
 	}
 
 	id := template.HTML(`<p style="margin-top: 64px;" class="docId">(` + doc.id + `)</p>`)
+	if doc.id == "" {
+		id = template.HTML("")
+	}
 
 	return template.HTML(createPage("Manesei: "+doc.title,
 		template.HTML(headerBuilder.String())+viewer+links+id))
